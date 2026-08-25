@@ -1,0 +1,17 @@
+{
+  "config": {
+    "p": 0.7,
+    "n": 100,
+    "seed": 42,
+    "out": "E:\\1_Files\\6-EAI\\labs\\week2-statistics\\experiment-result.json"
+  },
+  "result": {
+    "success_rate": 0.73
+  },
+  "environment": {
+    "python": "3.14.3",
+    "platform": "Windows-11-10.0.22631-SP0",
+    "numpy": "2.4.6",
+    "git_commit": "1db1c437f30aefb4a7242814e55d0cb956351682"
+  }
+}
