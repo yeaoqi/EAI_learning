@@ -701,7 +701,7 @@ def fit_linear_gd(X, y, learning_rate=0.05, steps=1000):
 
     for _ in range(steps):
         residual = X @ w - y
-        loss_value = float((residual.T @ residual) / (2 * n))
+        loss_value = float(((residual.T @ residual) / (2 * n)).item())
         losses.append(loss_value)
         gradient = (X.T @ residual) / n
         w -= learning_rate * gradient
