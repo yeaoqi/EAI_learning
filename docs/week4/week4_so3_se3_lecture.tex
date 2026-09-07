@@ -1,0 +1,404 @@
+% !TeX program = xelatex
+\documentclass[UTF8,a4paper,11pt]{ctexart}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb,bm,mathtools,booktabs,array,longtable}
+\usepackage{xcolor,hyperref,listings,enumitem}
+\hypersetup{colorlinks=true,linkcolor=blue!60!black,urlcolor=blue!60!black}
+\setlist{itemsep=2pt,topsep=3pt}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\SO}{\mathrm{SO}(3)}
+\newcommand{\SE}{\mathrm{SE}(3)}
+\newcommand{\so}{\mathfrak{so}(3)}
+\newcommand{\se}{\mathfrak{se}(3)}
+\newcommand{\Exp}{\operatorname{Exp}}
+\newcommand{\Log}{\operatorname{Log}}
+\newcommand{\hatmat}[1]{\left[#1\right]_{\times}}
+\newcommand{\veeop}{\operatorname{vee}}
+\newcommand{\hatop}{\operatorname{hat}}
+\title{Week 4 讲义：从旋转到李群\texorpdfstring{$\SO$}{SO(3)} 与\texorpdfstring{$\SE$}{SE(3)}}
+\author{具身智能学习路线}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\begin{abstract}
+本讲义按照 Week 4 自测题 A--E 的顺序，从坐标系和二维直觉开始，逐步建立三维旋转、刚体位姿、齐次变换、四元数、李群/李代数以及指数--对数映射。重点不只是记公式，而是追问每个对象为什么被引入、公式从哪里来、它解决了什么问题，以及实现时哪些地方容易出错。默认采用列向量、左乘、右手坐标系，并约定四元数顺序为 $[w,x,y,z]$。
+\end{abstract}
+
+\section{学习路线：为什么从坐标走向李群}
+机器人要回答三个基本问题：物体在哪里（位置）、朝向如何（旋转）、怎样把不同传感器或关节坐标中的数据联系起来（坐标变换）。位置可以用三个实数直接表示，但旋转不能简单地用三个任意实数相加：旋转矩阵有正交约束，欧拉角有奇异性，四元数有单位长度约束和双覆盖。
+
+这导致一条自然的发展脉络：
+\begin{enumerate}
+  \item 用向量和矩阵描述坐标与旋转（A）；
+  \item 比较不同旋转参数化（B）；
+  \item 将旋转和平移合并为刚体位姿（C）；
+  \item 发现位姿集合既有“可复合”的群结构，又能在局部做微积分，于是引入李群和李代数（D）；
+  \item 最后将公式落实为可测试的数值程序（E）。
+\end{enumerate}
+
+\section{A：坐标系与旋转基础}
+\subsection{A1 点、向量与坐标表示}
+几何对象与坐标不是同一件事。点 $P$ 是空间中的位置，向量 $v$ 是有方向和长度的自由对象；坐标是选定坐标系基底后得到的分量。例如在坐标系 $\{A\}$ 中，点的坐标记为 ${}^A p$。换到 $\{B\}$ 后，同一个几何点变成 ${}^B p$，数值通常不同，但几何位置不变。
+
+设 $\{B\}$ 的原点在 $\{A\}$ 中为 ${}^A t_{AB}$，$B$ 的基向量在 $A$ 中组成矩阵 ${}^A R_B$。则
+\[
+{}^A p = {}^A R_B\,{}^B p + {}^A t_{AB}.
+\]
+这里下标 ``$AB$'' 的含义必须由全文约定决定；本讲义使用 $R_{AB}$ 表示“把 $B$ 坐标变到 $A$”。
+
+\paragraph{为什么要区分点和向量？}点会随坐标系原点平移，向量只描述方向和长度，不应因原点移动而改变。这正是后面齐次坐标中“点补 1、方向补 0”的原因。
+
+\subsection{A2 主动旋转与被动坐标变换}
+主动旋转把对象本身转动：$v'=Rv$；被动变换保持对象不动，只更换坐标系。若新坐标系的基底相对旧坐标系旋转了 $R$，同一向量的新坐标常写成 $v'=R^T v$。因此同一个物理过程会出现互为转置的矩阵。
+
+判断约定的可靠方法是检查一个基向量或一个具体点：作者的 $R$ 是把“旧坐标表示变为新坐标表示”，还是把“向量主动转到新方向”？再检查复合顺序。例如若 $R_{AB}$ 是 $B\to A$，则 $R_{AC}=R_{AB}R_{BC}$。
+
+\subsection{A3 旋转矩阵与 \texorpdfstring{$\SO$}{SO(3)}}
+三维旋转矩阵的集合定义为
+\[
+\SO=\{R\in\R^{3\times3}\mid R^TR=I,\ \det R=1\}.
+\]
+若 $x,y$ 是任意向量，则
+\[
+(Rx)^T(Ry)=x^TR^TRy=x^Ty,
+\]
+故内积、长度和夹角保持不变。正交矩阵的行列式只能是 $\pm1$：$-1$ 对应反射或镜像，只有 $+1$ 才是保持右手性的纯旋转。由 $R^TR=I$ 直接得到
+\[
+R^{-1}=R^T.
+\]
+
+\subsection{A4 基本旋转与手算}
+右手系下绕三个坐标轴的主动旋转为
+\[
+R_x(\theta)=\begin{bmatrix}1&0&0\\0&\cos\theta&-\sin\theta\\0&\sin\theta&\cos\theta\end{bmatrix},\quad
+R_y(\theta)=\begin{bmatrix}\cos\theta&0&\sin\theta\\0&1&0\\-\sin\theta&0&\cos\theta\end{bmatrix},
+\]
+\[
+R_z(\theta)=\begin{bmatrix}\cos\theta&-\sin\theta&0\\\sin\theta&\cos\theta&0\\0&0&1\end{bmatrix}.
+\]
+对 $p=(1,0,0)^T$ 绕 $z$ 轴旋转 $90^\circ$：
+\[
+R_z(\tfrac\pi2)p=(0,1,0)^T,
+\qquad \|p'\|=\|p\|=1.
+\]
+
+\subsection{A5 旋转复合与顺序}
+若 ${}^B p=R_{BC}{}^C p$，且 ${}^A p=R_{AB}{}^B p$，代入可得
+\[
+{}^A p=R_{AB}R_{BC}{}^C p,
+\qquad R_{AC}=R_{AB}R_{BC}.
+\]
+矩阵乘法一般不交换，因为先绕 $x$ 再绕 $y$ 与先绕 $y$ 再绕 $x$ 会得到不同朝向。非交换性不是记号麻烦，而是三维旋转的真实几何性质。
+
+\subsection{A6 相对旋转}
+若两个姿态相对于世界系的旋转为 $R_{W1},R_{W2}$，定义“从姿态 1 的坐标表达变到姿态 2 的坐标表达”为
+\[
+R_{21}=R_{W2}^TR_{W1}.
+\]
+推导如下：同一向量先由 1 系变到世界系，${}^Wv=R_{W1}{}^1v$；再由世界变到 2 系，${}^2v=R_{W2}^T{}^Wv$，合并即上式。若题目采用“主动地把姿态 1 旋到姿态 2”，则常见的是 $R_{W2}R_{W1}^T$；关键是先写清楚输入输出。
+
+\section{B：欧拉角、轴角与四元数}
+\subsection{B1 欧拉角为何必须说明顺序}
+欧拉角用三个有顺序的基本旋转参数化姿态。例如外旋 ZYX 可写成
+\[
+R=R_z(\psi)R_y(\theta)R_x(\phi),
+\]
+其中 $\phi$、$\theta$、$\psi$ 常称 roll、pitch、yaw。内旋是绕随刚体移动的轴旋转，外旋是绕固定空间轴旋转；两种解释可通过改变乘法顺序互相对应。由于矩阵不交换，仅给出三个数字而没有顺序、内外旋和坐标约定是不完整的。
+
+\subsection{B2 Gimbal lock：参数奇异，不是物体失去自由度}
+对 ZYX 参数化，计算可得当 $\theta=\pm\pi/2$ 时，第一和第三个转轴重合，roll 与 yaw 只以某个组合出现。映射
+\[
+(\phi,\theta,\psi)\longmapsto R
+\]
+的 Jacobian 在此处降秩，因此不同角度组合对应同一个姿态，逆解不唯一且对噪声敏感。刚体本身仍有 3 个旋转自由度；失效的是这套坐标参数化。控制中可能表现为角度跳变、插值绕远和数值抖动。
+
+\subsection{B3 轴角与 Rodrigues 公式}
+轴角由单位轴 $u\in\R^3,\|u\|=1$ 与角度 $\theta$ 组成。定义
+\[
+K=\hatmat{u}=\begin{bmatrix}0&-u_z&u_y\\u_z&0&-u_x\\-u_y&u_x&0\end{bmatrix}.
+\]
+Rodrigues 公式为
+\[
+R=I+\sin\theta K+(1-\cos\theta)K^2.
+\]
+当 $\theta=0$ 时，$\sin0=0,1-\cos0=0$，所以 $R=I$。轴角的优点是几何意义直接，旋转向量 $\omega=\theta u$ 还可作为局部增量。
+
+\subsection{B4 反对称矩阵与叉乘}
+对 $v=(v_1,v_2,v_3)^T$ 定义
+\[
+\hatmat{v}=\begin{bmatrix}0&-v_3&v_2\\v_3&0&-v_1\\-v_2&v_1&0\end{bmatrix}.
+\]
+对任意 $p=(p_1,p_2,p_3)^T$，矩阵乘法给出
+\[
+\hatmat{v}p=\begin{bmatrix}v_2p_3-v_3p_2\\v_3p_1-v_1p_3\\v_1p_2-v_2p_1\end{bmatrix}=v\times p.
+\]
+这一步把几何叉乘变成线性代数运算，是李代数和刚体速度公式的基础。
+
+\subsection{B5 四元数从哪里来}
+四元数写成 $q=(w,\mathbf q)$，其中 $\mathbf q=(x,y,z)^T$。轴角 $(u,\theta)$ 对应单位四元数
+\[
+q=\left(\cos\frac\theta2,\ u\sin\frac\theta2\right),
+\qquad w^2+x^2+y^2+z^2=1.
+\]
+半角来自四元数乘法：旋转向量写成纯虚四元数 $p_q=(0,p)$，旋转为
+\[
+p'_q=q\otimes p_q\otimes q^{-1}.
+\]
+不同库采用 $[w,x,y,z]$ 或 $[x,y,z,w]$ 只是存储约定；混用会把标量部当成向量部，导致完全错误的旋转。
+
+\subsection{B6 双覆盖}
+因为
+\[
+(-q)\otimes(0,p)\otimes(-q)^{-1}=q\otimes(0,p)\otimes q^{-1},
+\]
+所以 $q$ 和 $-q$ 表示同一个旋转。插值时若相邻四元数内积 $q_1^Tq_2<0$，可令 $q_2\leftarrow-q_2$，选择短弧路径。直接比较分量会把同一旋转误判为相差很大。
+
+\subsection{B7 Hamilton 乘积}
+设 $q_1=(w_1,v_1),q_2=(w_2,v_2)$，则
+\[
+q_1\otimes q_2=\bigl(w_1w_2-v_1^Tv_2,\ w_1v_2+w_2v_1+v_1\times v_2\bigr).
+\]
+叉乘不交换，故四元数乘法一般不交换。单位四元数的逆为共轭 $q^{-1}=(w,-v)$，于是可用上式旋转向量。
+
+\subsection{B8 四种表示的选择}
+\begin{center}
+\begin{tabular}{p{2.2cm}p{2.2cm}p{3.2cm}p{3.2cm}}
+\toprule
+表示 & 参数/约束 & 优点 & 局限与适用场景\\
+\midrule
+旋转矩阵 & 9 个数，正交约束 & 无参数奇异，复合和作用直接 & 参数冗余；适合内部计算、坐标变换\\
+欧拉角 & 3 个数，依赖顺序 & 人类直观、日志友好 & gimbal lock、跳变；适合界面和报告\\
+轴角/旋转向量 & 3 个数 & 轴和角清楚，局部增量自然 & 角度 $\pi$ 附近有分支；适合误差和优化\\
+单位四元数 & 4 个数，单位约束 & 复合快、插值平滑、无 gimbal lock & 双覆盖；适合姿态状态和插值\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{C：从旋转到刚体位姿}
+\subsection{C1 为什么需要 \texorpdfstring{$\SE$}{SE(3)}}
+旋转只能回答“朝向哪里”，不能回答“原点在哪里”。刚体位姿必须同时包含 $R\in\SO$ 和 $t\in\R^3$：
+\[
+\SE=\left\{\begin{bmatrix}R&t\\0&1\end{bmatrix}:R\in\SO,\ t\in\R^3\right\}.
+\]
+因此 $\SO$ 有 3 个自由度，$\SE$ 有 6 个自由度。
+
+\subsection{C2 齐次坐标}
+齐次变换为
+\[
+T=\begin{bmatrix}R&t\\0_{1\times3}&1\end{bmatrix}.
+\]
+点补成 $\tilde p=(p,1)^T$ 后：
+\[
+T\tilde p=\begin{bmatrix}Rp+t\\1\end{bmatrix}.
+\]
+方向补成 $\tilde d=(d,0)^T$，得到 $T\tilde d=(Rd,0)^T$，因此平移不会改变方向。
+
+\subsection{C3 位姿手算}
+若 $B$ 相对 $A$ 绕 $z$ 轴 $90^\circ$，且 $B$ 原点在 $A$ 中为 $(1,2,0)^T$，则
+\[
+T_{AB}=\begin{bmatrix}0&-1&0&1\\1&0&0&2\\0&0&1&0\\0&0&0&1\end{bmatrix}.
+\]
+对 ${}^Bp=(1,0,0)^T$：
+\[
+{}^Ap=R_{AB}{}^Bp+t_{AB}=(0,1,0)^T+(1,2,0)^T=(1,3,0)^T.
+\]
+
+\subsection{C4 齐次变换的逆}
+由 $p_A=R_{AB}p_B+t_{AB}$，左乘 $R_{AB}^T$：
+\[
+p_B=R_{AB}^Tp_A-R_{AB}^Tt_{AB}.
+\]
+故
+\[
+T_{AB}^{-1}=\begin{bmatrix}R_{AB}^T&-R_{AB}^Tt_{AB}\\0&1\end{bmatrix}.
+\]
+平移不能简单写成 $-t$，因为先要把世界坐标中的平移向量表达回旋转后的坐标系。
+
+\subsection{C5 变换链与 TF}
+若已知 $T_{WB}$、$T_{BC}$ 和相机点 $p_C$，则
+\[
+\tilde p_W=T_{WB}T_{BC}\tilde p_C.
+\]
+交换顺序会改变“先经过哪一个坐标系”的几何意义。ROS 2 TF 将坐标系作为树的节点、变换作为边；沿树从源 frame 到目标 frame 逐边相乘，正是上述变换链。树结构还避免了同一对 frame 存在互相矛盾的多条闭环。
+
+\subsection{C6 为什么不能逐元素平均}
+若 $R_1,R_2\in\SO$，通常 $(R_1+R_2)/2$ 不满足 $R^TR=I$。合法旋转集合是弯曲流形，不是普通向量空间。可行方法包括：
+\begin{enumerate}
+\item 将矩阵平均后用 SVD 投影：若 $M=U\Sigma V^T$，取 $R=U\operatorname{diag}(1,1,\det(UV^T))V^T$；
+\item 四元数统一符号后平均并归一化；
+\item 在李代数中计算相对旋转的 $\Log$，平均局部向量，再用 $\Exp$ 返回流形。
+\end{enumerate}
+欧拉角还存在 $\pm\pi$ 周期，例如 $179^\circ$ 和 $-179^\circ$ 的普通均值是 $0^\circ$，但正确的圆周均值应接近 $180^\circ$。
+
+\section{D：李群、李代数与 \texorpdfstring{$\Exp/\Log$}{Exp/Log}}
+\subsection{D1 群的四条公理与李群}
+群是集合 $G$ 配合运算 $\circ$，满足：
+\begin{enumerate}
+\item 封闭性：$a,b\in G\Rightarrow a\circ b\in G$；
+\item 结合律：$(a\circ b)\circ c=a\circ(b\circ c)$；
+\item 单位元 $e$：$e\circ a=a\circ e=a$；
+\item 逆元：每个 $a$ 存在 $a^{-1}$，使 $a\circ a^{-1}=e$。
+\end{enumerate}
+对 $\SO$ 和 $\SE$，运算分别是矩阵乘法；封闭性来自旋转复合仍是旋转，单位元是 $I$，逆元是反向旋转或反向位姿。它们又是光滑流形：局部可用有限个连续参数描述，且乘法、求逆对参数是光滑的，因此称为李群。
+
+\subsection{D2 \texorpdfstring{$\so(3)$}{so(3)} 与 hat/vee}
+\[
+\so=\{\Omega\in\R^{3\times3}:\Omega^T=-\Omega\}.
+\]
+向量到矩阵的 hat 映射：
+\[
+\hatop(\omega)=\hatmat{\omega}.
+\]
+反向的 vee 映射：
+\[
+\veeop\!\left(\begin{bmatrix}0&-c&b\\c&0&-a\\-b&a&0\end{bmatrix}\right)=(a,b,c)^T.
+\]
+在单位元 $I$ 附近，$R(\varepsilon)\approx I+\varepsilon\hatmat{\omega}$；所以反对称矩阵正是旋转流形在 $I$ 处的切向方向。$\so$ 的维数为 3。
+
+\subsection{D3 从矩阵指数到 Rodrigues}
+矩阵指数定义为
+\[
+\exp(A)=I+A+\frac{A^2}{2!}+\frac{A^3}{3!}+\cdots.
+\]
+令 $\omega=\theta u$、$K=\hatmat{u}$。由于 $K^3=-K$，幂级数可按偶次、奇次收集：
+\[
+\exp(\theta K)=I+\sin\theta K+(1-\cos\theta)K^2.
+\]
+这就是 Rodrigues 公式。方向 $u$ 是旋转轴，模长 $\theta$ 是角度。由于小角度时 $\sin\theta\approx\theta$、$1-\cos\theta\approx\theta^2/2$，数值实现常使用级数避免除以接近零的量。
+
+为什么结果属于 $\SO$？因为 $A=\hatmat{\omega}$ 反对称：
+\[
+\exp(A)^T\exp(A)=\exp(-A)\exp(A)=I,
+\quad \det\exp(A)=\exp(\operatorname{tr}A)=1.
+\]
+
+\subsection{D4 从 trace 推导旋转角与 \texorpdfstring{$\Log$}{Log}}
+由 Rodrigues 公式和 $\operatorname{tr}K=0$、$K^2=uu^T-I$、$\operatorname{tr}(K^2)=-2$：
+\[
+\operatorname{tr}(R)=3+(1-\cos\theta)(-2)=1+2\cos\theta.
+\]
+故
+\[
+\boxed{\theta=\arccos\!\left(\frac{\operatorname{tr}(R)-1}{2}\right)}.
+\]
+又由 $R-R^T=2\sin\theta K$，得到
+\[
+\Log(R)=\frac{\theta}{2\sin\theta}(R-R^T),
+\qquad \omega=\Log(R)^\vee.
+\]
+实现时先将 $c=(\operatorname{tr}R-1)/2$ 截断到 $[-1,1]$。当 $\theta\approx0$，使用 $\theta/(2\sin\theta)\approx1/2$；当 $\theta\approx\pi$，$R-R^T$ 很小而轴由 $R+I\approx2uu^T$ 恢复，且 $u$ 与 $-u$ 表示同一半圈旋转。
+
+\subsection{D5 \texorpdfstring{$\se(3)$}{se(3)} 与刚体 twist}
+刚体瞬时运动由角速度 $\omega$ 与线速度 $v$ 组成。本讲义采用
+\[
+\xi=\begin{bmatrix}\omega\\v\end{bmatrix}\in\R^6.
+\]
+其矩阵形式为
+\[
+\hat\xi=\begin{bmatrix}\hatmat{\omega}&v\\0&0\end{bmatrix}\in\se,
+\qquad
+\se=\left\{\begin{bmatrix}\Omega&v\\0&0\end{bmatrix}:\Omega\in\so\right\}.
+\]
+对点 $p$，瞬时速度为 $\dot p=\omega\times p+v$。因此 twist 不是某个有限位姿，而是位姿的局部速度/增量。
+
+\subsection{D6 \texorpdfstring{$\SE(3)$}{SE(3)} 的指数与对数}
+指数映射
+\[
+\Exp:\se\to\SE
+\]
+把局部 twist 积分成有限位姿：
+\[
+T(t)=\exp(t\hat\xi)T(0).
+\]
+若 $\Omega=\hatmat{\omega}$、$\theta=\|\omega\|$，则
+\[
+\Exp(\hat\xi)=\begin{bmatrix}R&Vv\\0&1\end{bmatrix},\quad R=\exp(\Omega),
+\]
+\[
+V=I+\frac{1-\cos\theta}{\theta^2}\Omega+\frac{\theta-\sin\theta}{\theta^3}\Omega^2.
+\]
+当 $\omega=0$ 时取极限 $V=I$。对数映射
+\[
+\Log:\SE\to\se
+\]
+先对 $R$ 求 $\omega=\Log(R)^\vee$，再由 $v=V^{-1}t$ 恢复 twist。它们把“弯曲的位姿空间”和“局部的 6 维向量空间”联系起来。
+
+\subsection{D7 位姿误差}
+选用右不变误差（误差在估计坐标系中表达）：
+\[
+T_{\mathrm{err}}=T_{\mathrm{estimated}}^{-1}T_{\mathrm{target}},
+\qquad e=\Log(T_{\mathrm{err}})^\vee\in\R^6.
+\]
+若 $e=0$，则两个位姿相同。优化时可在 $e$ 上做普通的梯度更新，再用 $\Exp$ 回到 $\SE$。若改用左误差 $T_{\mathrm{target}}T_{\mathrm{estimated}}^{-1}$，误差会在另一坐标系表达；两者都正确，但不能混用。
+
+\subsection{D8 常见误区}
+\begin{enumerate}
+\item 旋转向量不是欧拉角：前者是轴角的紧凑表示，后者依赖三次旋转顺序。
+\item 任意 $3\times3$ 矩阵不是旋转矩阵：必须满足正交性和行列式为 1。
+\item 四元数必须可归一化；四个分量本身不自动构成合法旋转。
+\item 位姿不能像向量逐元素相加；应通过群乘法或在李代数中组合增量。
+\item $\Log(\Exp(\xi))=\xi$ 只在选定的局部主值范围内成立，大角度会遇到 $2\pi$ 周期和轴角非唯一性。
+\end{enumerate}
+
+\section{E：NumPy 实现与实验思路}
+\subsection{E1 SO(3) 基础工具}
+核心检查是形状、有限性、正交误差 $\|R^TR-I\|$ 和行列式误差 $|\det R-1|$。SVD 投影的推导来自正交 Procrustes 问题：对近似矩阵 $M=U\Sigma V^T$，最接近的正交矩阵为 $UV^T$；若其行列式为 $-1$，翻转最小奇异值对应的方向，得到 $U\operatorname{diag}(1,1,\det(UV^T))V^T$。
+
+\begin{lstlisting}[language=Python,basicstyle=\small\ttfamily,frame=single]
+def skew(v):
+    v = np.asarray(v, dtype=float)
+    if v.shape != (3,) or not np.all(np.isfinite(v)):
+        raise ValueError("v must be finite with shape (3,)")
+    x, y, z = v
+    return np.array([[0., -z, y], [z, 0., -x], [-y, x, 0.]])
+
+def project_to_so3(M):
+    U, _, Vt = np.linalg.svd(M)
+    D = np.eye(3); D[-1, -1] = np.linalg.det(U @ Vt)
+    return U @ D @ Vt
+\end{lstlisting}
+
+固定随机种子生成至少 1000 个随机矩阵，报告最大值
+\[
+\max_i\|R_i^TR_i-I\|_\infty,\quad
+\max_i|\det(R_i)-1|,\quad
+\max_i\|R_i^{-1}-R_i^T\|_\infty.
+\]
+
+\subsection{E2 旋转表示转换}
+轴角转矩阵直接使用 Rodrigues；矩阵转轴角使用 D4 的 trace 公式，并对 $0$ 与 $\pi$ 分支单独处理。四元数转矩阵可由 $q\otimes(0,p)\otimes q^{-1}$ 展开得到；矩阵转四元数通常按最大对角元素选择分支，减少 $\theta\approx\pi$ 时的消去误差。往返测试比较矩阵误差或相对旋转角，不比较四元数分量，因为存在 $q\sim-q$。
+
+\subsection{E3 SE(3) 变换库}
+实现 \texttt{make\_transform} 时检查 $R\in\SO$、$t$ 的形状和有限性；\texttt{inverse\_transform} 使用 $R^T,-R^Tt$；批量点可写成
+\[
+P_A=(P_B R^T)+t^T
+\]
+（若点按行存储）。随机测试应验证 $TT^{-1}\approx I$、逐步变换与复合变换结果一致，并分别覆盖单点和 $n\times3$ 点集。
+
+\subsection{E4 exp/log 实验}
+对旋转向量 $\omega$，实现 $\Exp(\hatmat{\omega})$；实现 $\Log$ 时测试角度接近 $0$、一般角度和接近 $\pi$。应画出误差随角度变化的曲线：零附近主要受浮点消去影响，$\pi$ 附近主要受轴恢复不稳定和分支非唯一影响。验证 $\Exp(\Log(R))\approx R$ 比验证向量逐分量相等更合理。
+
+\subsection{E5 坐标系可视化}
+绘制每个坐标系的三个轴：若 frame 的原点为 $t$、姿态为 $R$，则第 $j$ 个轴的线段为 $t\to t+sR[:,j]$。将同一个点分别画在源 frame 和目标 frame 中，能直观看到“坐标数值变化”和“几何点不变”是两件事。
+
+\section{一页总结与复习检查}
+\begin{longtable}{p{2.7cm}p{10.5cm}}
+\toprule
+概念 & 最小可用记忆\\
+\midrule
+旋转矩阵 & $R^TR=I,\det R=1$；复合用乘法，逆为转置。\\
+轴角/旋转向量 & $\omega=\theta u$；$R=\Exp(\hatmat{\omega})$。\\
+四元数 & $q=(\cos\frac\theta2,u\sin\frac\theta2)$；$q$ 与 $-q$ 同旋转。\\
+齐次变换 & $T=[R,t;0,1]$；点补 1，方向补 0。\\
+李代数 & $\so$ 是反对称矩阵，$\se$ 是 $4\times4$ twist 矩阵。\\
+Exp/Log & 局部增量与有限位姿之间的往返；适合误差、插值和优化。\\
+数值边界 & $\theta\approx0$ 用级数，$\theta\approx\pi$ 单独恢复轴并处理分支。\\
+\bottomrule
+\end{longtable}
+
+完成本周验收时，应能不看资料回答：给定两个 frame 如何写变换链；为什么 $\SO$ 是李群；如何从旋转矩阵得到轴角；为什么不能平均旋转矩阵；以及一个 twist 经过 $\Exp$ 后为何成为合法的刚体位姿。
+
+\end{document}
