@@ -43,16 +43,21 @@
 \subsection{A1 点、向量与坐标表示}
 几何对象与坐标不是同一件事。点 $P$ 是空间中的位置，向量 $v$ 是有方向和长度的自由对象；坐标是选定坐标系基底后得到的分量。例如在坐标系 $\{A\}$ 中，点的坐标记为 ${}^A p$。换到 $\{B\}$ 后，同一个几何点变成 ${}^B p$，数值通常不同，但几何位置不变。
 
+\paragraph{从一维类比开始。}在数轴上，同一个点相对于原点 $O_A$ 的坐标是 $x_A$，相对于另一个原点 $O_B$ 的坐标是 $x_B$。如果 $O_B$ 在 $A$ 中的位置为 $t_{AB}$，则 $x_A=x_B+t_{AB}$。三维情形只是把数轴换成三条正交基向量，并额外允许基底发生旋转。
+
 设 $\{B\}$ 的原点在 $\{A\}$ 中为 ${}^A t_{AB}$，$B$ 的基向量在 $A$ 中组成矩阵 ${}^A R_B$。则
 \[
 {}^A p = {}^A R_B\,{}^B p + {}^A t_{AB}.
 \]
+把点写成 $p=\sum_i p_i^B e_i^B+o_B$，再用 $A$ 系表示每个 $e_i^B$ 和 $o_B$，就得到这个公式：$R_{AB}$ 的第 $i$ 列是 $B$ 的第 $i$ 根轴在 $A$ 中的坐标，$t_{AB}$ 是 $B$ 原点在 $A$ 中的坐标。
 这里下标 ``$AB$'' 的含义必须由全文约定决定；本讲义使用 $R_{AB}$ 表示“把 $B$ 坐标变到 $A$”。
 
 \paragraph{为什么要区分点和向量？}点会随坐标系原点平移，向量只描述方向和长度，不应因原点移动而改变。这正是后面齐次坐标中“点补 1、方向补 0”的原因。
 
 \subsection{A2 主动旋转与被动坐标变换}
 主动旋转把对象本身转动：$v'=Rv$；被动变换保持对象不动，只更换坐标系。若新坐标系的基底相对旧坐标系旋转了 $R$，同一向量的新坐标常写成 $v'=R^T v$。因此同一个物理过程会出现互为转置的矩阵。
+
+\paragraph{二维例子。}主动逆时针旋转 $90^\circ$ 把 $e_x=(1,0)^T$ 变为 $(0,1)^T$；若物体不动而坐标轴逆时针旋转 $90^\circ$，物体在新坐标中的分量是 $(0,-1)^T$。判断约定时先检查矩阵右侧输入和左侧输出属于哪个坐标系。
 
 判断约定的可靠方法是检查一个基向量或一个具体点：作者的 $R$ 是把“旧坐标表示变为新坐标表示”，还是把“向量主动转到新方向”？再检查复合顺序。例如若 $R_{AB}$ 是 $B\to A$，则 $R_{AC}=R_{AB}R_{BC}$。
 
@@ -383,6 +388,144 @@ P_A=(P_B R^T)+t^T
 
 \subsection{E5 坐标系可视化}
 绘制每个坐标系的三个轴：若 frame 的原点为 $t$、姿态为 $R$，则第 $j$ 个轴的线段为 $t\to t+sR[:,j]$。将同一个点分别画在源 frame 和目标 frame 中，能直观看到“坐标数值变化”和“几何点不变”是两件事。
+
+\section{逐题详细推导补充}
+本节把前面压缩的关键公式再从最基本的事实推一遍。阅读时建议每次只跟一条等式：先说明对象和维度，再说明用了哪条性质，最后检查结果是否满足几何约束。
+
+\subsection{为什么反对称矩阵描述“瞬时旋转”}
+考虑一条随参数 $t$ 变化的旋转矩阵 $R(t)\in\SO$，且 $R(0)=I$。由于 $R(t)^TR(t)=I$，对 $t$ 求导并在 $t=0$ 处代入：
+\[
+\frac{d}{dt}(R^TR)=\dot R^TR+R^T\dot R=0
+\quad\Longrightarrow\quad
+\dot R(0)^T+\dot R(0)=0.
+\]
+所以单位元处的任意切向速度 $\dot R(0)$ 都是反对称矩阵。三维反对称矩阵只有三个独立元素，恰好可写为 $\hatmat{\omega}$。这不是人为规定，而是正交约束微分后必然得到的结果。
+
+若 $R(t)=\exp(t\hatmat{\omega})$，则
+\[
+\dot R(t)=\hatmat{\omega}R(t)=R(t)\hatmat{\omega},
+\qquad \dot R(0)=\hatmat{\omega}.
+\]
+因此 $\omega$ 是从单位旋转出发的角速度方向和大小。对任意点 $p$，若点随旋转运动，$p(t)=R(t)p(0)$，则
+\[
+\dot p(0)=\dot R(0)p=\hatmat{\omega}p=\omega\times p,
+\]
+这就从矩阵微分严格得到刚体旋转速度公式。
+
+\subsection{矩阵指数为何会变成 Rodrigues 公式}
+令 $u$ 为单位向量，$K=\hatmat{u}$。对任意向量 $x$，三重向量积恒等式给出
+\[
+K^2x=u\times(u\times x)=u(u^Tx)-x,
+\]
+所以作为矩阵 $K^2=uu^T-I$；再乘一次 $K$：
+\[
+K^3=K(uu^T-I)=Kuu^T-K=-K,
+\]
+因为 $Ku=u\times u=0$。于是指数级数
+\[
+e^{\theta K}=I+\theta K+\frac{\theta^2K^2}{2!}+\frac{\theta^3K^3}{3!}+\cdots
+\]
+中，所有奇次幂都化成 $K$，所有偶次幂（从 $K^2$ 开始）都化成 $K^2$：
+\[
+\begin{aligned}
+e^{\theta K}
+&=I+\left(\theta-\frac{\theta^3}{3!}+\frac{\theta^5}{5!}-\cdots\right)K\\
+&\quad+\left(\frac{\theta^2}{2!}-\frac{\theta^4}{4!}+\frac{\theta^6}{6!}-\cdots\right)K^2\\
+&=I+\sin\theta\,K+(1-\cos\theta)K^2.
+\end{aligned}
+\]
+这就是 Rodrigues 公式。它的几何含义也可直接看出：$Ku=0$，所以轴向分量不变；对垂直于 $u$ 的分量，$K$ 相当于旋转 $90^\circ$ 的切向操作，$K^2$ 提供径向修正，两个系数正好是 $\sin\theta$ 和 $1-\cos\theta$。
+
+\subsection{trace 公式和 Log 公式的完整来历}
+由 $K^2=uu^T-I$，且 $\operatorname{tr}(uu^T)=u^Tu=1$，有 $\operatorname{tr}(K^2)=-2$；同时反对称矩阵对角线为零，$\operatorname{tr}(K)=0$。因此
+\[
+\operatorname{tr}(R)=\operatorname{tr}(I)+\sin\theta\operatorname{tr}(K)+(1-\cos\theta)\operatorname{tr}(K^2)
+=3-2(1-\cos\theta)=1+2\cos\theta.
+\]
+这说明 trace 并不是神奇的角度传感器，而是 Rodrigues 展开中三个特征值 $1,e^{i\theta},e^{-i\theta}$ 的和：
+\[
+\operatorname{tr}(R)=1+e^{i\theta}+e^{-i\theta}=1+2\cos\theta.
+\]
+从而 $\theta=\arccos((\operatorname{tr}R-1)/2)$，主值通常取 $[0,\pi]$。
+
+再把 Rodrigues 公式转置：$R^T=I-\sin\theta K+(1-\cos\theta)K^2$。相减后所有对称项消失：
+\[
+R-R^T=2\sin\theta K.
+\]
+乘上 $\theta/(2\sin\theta)$ 即得
+\[
+\Log(R)=\theta K=\frac{\theta}{2\sin\theta}(R-R^T).
+\]
+最后使用 vee 把矩阵变成三维旋转向量 $\omega=\theta u$。当 $\theta$ 很小时，使用 $\sin\theta=\theta-\theta^3/6+O(\theta^5)$，所以 $\theta/(2\sin\theta)=1/2+\theta^2/12+O(\theta^4)$；当 $\theta$ 接近 $\pi$ 时，改用 $R+I=2uu^T$ 恢复轴，避免用很小的 $\sin\theta$ 作除数。
+
+\subsection{从 twist 到 \texorpdfstring{$SE(3)$}{SE(3)} 指数：为什么出现 $V$}
+令
+\[
+\hat\xi=\begin{bmatrix}\Omega&v\\0&0\end{bmatrix},\qquad \Omega=\hatmat{\omega}.
+\]
+直接计算幂次可得
+\[
+\hat\xi^2=\begin{bmatrix}\Omega^2&\Omega v\\0&0\end{bmatrix},\quad
+\hat\xi^3=\begin{bmatrix}\Omega^3&\Omega^2v\\0&0\end{bmatrix},
+\]
+一般地，$n\ge1$ 时右上块是 $\Omega^{n-1}v$。代入指数级数：
+\[
+e^{\hat\xi}=\begin{bmatrix}
+I+\Omega+\frac{\Omega^2}{2!}+\cdots &
+\left(I+\frac{\Omega}{2!}+\frac{\Omega^2}{3!}+\cdots\right)v\\
+0&1
+\end{bmatrix}.
+\]
+左上块是 $R=e^\Omega$；右上块定义为 $Vv$，其中
+\[
+V=I+\frac{\Omega}{2!}+\frac{\Omega^2}{3!}+\cdots
+=\int_0^1e^{s\Omega}\,ds.
+\]
+若 $\theta=\|\omega\|\ne0$，利用 $\Omega^3=-\theta^2\Omega$ 化简积分，得到
+\[
+V=I+\frac{1-\cos\theta}{\theta^2}\Omega+\frac{\theta-\sin\theta}{\theta^3}\Omega^2.
+\]
+所以平移列不是简单的 $v$：刚体在旋转的同时运动，线速度方向会被旋转过程不断改变，积分后产生 $Vv$。当 $\Omega=0$ 时，级数直接给出 $V=I$，退化为普通平移。
+
+\subsection{Log 的局部性、分支与“不是永远的逆”}
+指数映射把无限多个局部向量映射到同一旋转，例如
+\[
+\Exp(\hatmat{(\theta+2k\pi)u})=\Exp(\hatmat{\theta u}),\qquad k\in\mathbb Z.
+\]
+因此 Log 必须选择主值，通常令 $\theta\in[0,\pi]$。在 $0<\theta<\pi$ 且远离边界时，$\Log$ 局部唯一；在 $\theta=\pi$ 时，$u$ 与 $-u$ 给出同一个旋转，故全局不可能连续地选出唯一轴。优化和插值应尽量让单步增量落在主值邻域内，这也是“局部坐标”的含义。
+
+\subsection{群公理在矩阵上的逐条验证}
+以 $\SO$ 为例，若 $R_1,R_2\in\SO$，则
+\[
+(R_1R_2)^T(R_1R_2)=R_2^T(R_1^TR_1)R_2=I,
+\quad \det(R_1R_2)=\det R_1\det R_2=1,
+\]
+所以封闭。矩阵乘法的结合律来自普通乘法的结合律；单位元是 $I$；逆元由 $R^{-1}=R^T$ 给出且仍满足行列式为 1。$\SE$ 的验证完全类似，只需使用块矩阵乘法：
+\[
+\begin{bmatrix}R_1&t_1\\0&1\end{bmatrix}
+\begin{bmatrix}R_2&t_2\\0&1\end{bmatrix}
+=\begin{bmatrix}R_1R_2&R_1t_2+t_1\\0&1\end{bmatrix}.
+\]
+“李”字的新增内容是光滑性：矩阵元素作为欧氏空间坐标，乘法和求逆由加法、乘法、转置和行列式组成，在合法区域内都是光滑函数；群集合本身又可用 3 个或 6 个局部参数描述，所以既是群又是光滑流形。
+
+\subsection{为什么位姿误差要先相除再取 Log}
+普通向量的误差是 $x_2-x_1$，因为向量空间有减法。位姿没有自然的逐元素减法，但群中有“从一个位姿走到另一个位姿”的相对变换：
+\[
+T_{\mathrm{err}}=T_{\mathrm{est}}^{-1}T_{\mathrm{target}}.
+\]
+若 $T_{\mathrm{target}}=T_{\mathrm{est}}\Exp(\hat\delta)$，则
+\[
+T_{\mathrm{est}}^{-1}T_{\mathrm{target}}=\Exp(\hat\delta),
+\]
+再取 $\Log$ 就得到局部误差 $\delta$。这正是“先在群上做相对运算，再在切空间中做普通优化”的原因。左误差 $T_{\mathrm{target}}T_{\mathrm{est}}^{-1}$ 则把同一几何误差表达在另一坐标系中；选择哪一个取决于控制器或优化器的坐标约定。
+
+\subsection{E 部分代码为什么必须做边界检查}
+理论公式假设输入严格属于 $\SO$，但浮点计算只能得到近似值。若不检查 $R^TR-I$，一个普通的 3x3 矩阵也可能被错误地送进 Log；若不把 trace 公式的输入 clip 到 $[-1,1]$，浮点误差如 $1+10^{-15}$ 会让 `arccos` 返回 NaN；若不在小角度处分支，$\theta/\sin\theta$ 会产生灾难性消去。测试因此应按三层组织：
+\begin{enumerate}
+\item 结构层：形状、有限性、单位四元数、正交性和行列式；
+\item 代数层：$T^{-1}T\approx I$、$\Exp(\Log(R))\approx R$；
+\item 几何层：随机点经过连续变换与复合变换后坐标一致，报告最大误差和失败样例。
+\end{enumerate}
 
 \section{一页总结与复习检查}
 \begin{longtable}{p{2.7cm}p{10.5cm}}
