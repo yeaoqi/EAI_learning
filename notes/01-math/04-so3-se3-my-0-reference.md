@@ -543,113 +543,881 @@ e = Log(T_err)
 
 答案：
 
+下面的实现约定：输入必须是有限数值；`skew` 和 `project_to_so3` 对非法输入抛出
+`ValueError`；`is_rotation_matrix` 是谓词，形状错误或非有限输入返回 `False`。
+
+```python
+import numpy as np
+
+
+def _as_float_array(value, shape, name):
+    try:
+        array = np.asarray(value, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must contain numeric values") from exc
+
+    if array.shape != shape:
+        raise ValueError(f"{name} must have shape {shape}, got {array.shape}")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain only finite values")
+    return array
+
+
+def skew(vector):
+    """输入 shape=(3,)，返回 3x3 反对称矩阵。"""
+    v = _as_float_array(vector, (3,), "vector")
+    return np.array([
+        [0.0, -v[2], v[1]],
+        [v[2], 0.0, -v[0]],
+        [-v[1], v[0], 0.0],
+    ])
+
+
+def project_to_so3(matrix):
+    """使用 SVD 将有限 3x3 矩阵投影到 SO(3)。"""
+    matrix = _as_float_array(matrix, (3, 3), "matrix")
+    u, _, vt = np.linalg.svd(matrix)
+    rotation = u @ vt
+
+    # U @ Vt 可能是反射矩阵，翻转最后一个奇异方向使 det=+1。
+    if np.linalg.det(rotation) < 0.0:
+        u[:, -1] *= -1.0
+        rotation = u @ vt
+    return rotation
+
+
+def is_rotation_matrix(matrix, atol=1e-9):
+    """检查输入是否为有限的 SO(3) 矩阵。"""
+    if not np.isfinite(atol) or atol < 0:
+        raise ValueError("atol must be a finite non-negative number")
+
+    try:
+        matrix = np.asarray(matrix, dtype=float)
+    except (TypeError, ValueError):
+        return False
+
+    if matrix.shape != (3, 3) or not np.all(np.isfinite(matrix)):
+        return False
+
+    orthogonality_error = np.max(
+        np.abs(matrix.T @ matrix - np.eye(3))
+    )
+    determinant_error = abs(np.linalg.det(matrix) - 1.0)
+    return bool(
+        orthogonality_error <= atol
+        and determinant_error <= atol
+    )
+```
+
 参考实现要点：
 
 - `skew(vector)`：返回 3x3 反对称矩阵
 - `project_to_so3(matrix)`：对接近旋转矩阵的 3x3 矩阵做 SVD 投影
 - `is_rotation_matrix(matrix)`：检查形状、有限性、正交性和 `det`
 
-```python
-def skew(v):
-    return np.array([
-        [0.0, -v[2], v[1]],
-        [v[2], 0.0, -v[0]],
-        [-v[1], v[0], 0.0],
-    ])
-```
-
-`project_to_so3` 的常见做法：
+`project_to_so3` 的核心推导是：
 
 ```text
 U, _, Vt = svd(M)
-R = U Vt
+R = U @ Vt
 ```
 
-若 `det(R) < 0`，通常需要翻转一个奇异向量，保证结果落在 `SO(3)`。
+`U @ Vt` 首先保证正交，但它可能是 `det=-1` 的反射矩阵；这时翻转
+`U` 的最后一列，再重新计算 `R`，即可保证结果落在 `SO(3)`。
+
+测试示例：
+
+```python
+rng = np.random.default_rng(42)
+max_orthogonality_error = 0.0
+max_determinant_error = 0.0
+max_inverse_error = 0.0
+
+for _ in range(1000):
+    rotation = project_to_so3(rng.normal(size=(3, 3)))
+    noisy = rotation + 1e-3 * rng.normal(size=(3, 3))
+    projected = project_to_so3(noisy)
+
+    for candidate in (rotation, projected):
+        max_orthogonality_error = max(
+            max_orthogonality_error,
+            np.max(np.abs(candidate.T @ candidate - np.eye(3))),
+        )
+        max_determinant_error = max(
+            max_determinant_error,
+            abs(np.linalg.det(candidate) - 1.0),
+        )
+        max_inverse_error = max(
+            max_inverse_error,
+            np.max(np.abs(np.linalg.inv(candidate) - candidate.T)),
+        )
+
+assert np.allclose(skew([1.0, 2.0, 3.0]).T, -skew([1.0, 2.0, 3.0]))
+assert is_rotation_matrix(projected)
+assert not is_rotation_matrix(np.zeros((2, 2)))
+assert not is_rotation_matrix(
+    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, np.nan]]
+)
+
+print(max_orthogonality_error)
+print(max_determinant_error)
+print(max_inverse_error)
+```
+
+在浮点误差范围内，三项最大误差都应接近 `1e-15` 到 `1e-14`；
+具体数值取决于 NumPy 版本和平台。验证重点不是某个固定小数，而是：
+`R.T @ R` 接近单位阵、`det(R)` 接近 `1`，并且
+`inv(R)` 接近 `R.T`。
 
 ### E2. 题目
 > 补全 `axis_angle_to_matrix`、`matrix_to_axis_angle`、`quaternion_to_matrix`、`matrix_to_quaternion` 四个函数，并说明你使用的四元数顺序。要求测试 `0`、接近 `pi` 和一般随机姿态。
 
 答案：
 
-要点是统一约定，例如固定用 `[w, x, y, z]`。
+下面统一采用四元数顺序 `[w, x, y, z]`，并把矩阵转轴角时的角度规范到
+`[0, pi]`。四元数存在双覆盖：`q` 和 `-q` 表示同一个旋转，因此测试
+四元数往返时不能直接比较四个分量。
+
+```python
+import numpy as np
+
+EPS = 1e-12
+
+
+def axis_angle_to_matrix(axis, angle):
+    axis = np.asarray(axis, dtype=float)
+    if axis.shape != (3,) or not np.all(np.isfinite(axis)):
+        raise ValueError("axis must be a finite vector with shape (3,)")
+    if not np.isfinite(angle):
+        raise ValueError("angle must be finite")
+
+    norm = np.linalg.norm(axis)
+    if norm <= EPS:
+        raise ValueError("axis must be non-zero")
+    axis = axis / norm
+
+    K = np.array([
+        [0.0, -axis[2], axis[1]],
+        [axis[2], 0.0, -axis[0]],
+        [-axis[1], axis[0], 0.0],
+    ])
+    return np.eye(3) + np.sin(angle) * K + (1.0 - np.cos(angle)) * (K @ K)
+
+
+def _check_rotation_matrix(matrix):
+    matrix = np.asarray(matrix, dtype=float)
+    if (
+        matrix.shape != (3, 3)
+        or not np.all(np.isfinite(matrix))
+        or not np.allclose(matrix.T @ matrix, np.eye(3), atol=1e-8)
+        or not np.isclose(np.linalg.det(matrix), 1.0, atol=1e-8)
+    ):
+        raise ValueError("matrix must be a valid SO(3) matrix")
+    return matrix
+
+
+def matrix_to_axis_angle(matrix):
+    R = _check_rotation_matrix(matrix)
+    cos_theta = np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)
+    skew_vector = np.array([
+        R[2, 1] - R[1, 2],
+        R[0, 2] - R[2, 0],
+        R[1, 0] - R[0, 1],
+    ])
+    sin_theta = 0.5 * np.linalg.norm(skew_vector)
+    # atan2 比 arccos 更能保留接近 0 的小角度信息。
+    theta = float(np.arctan2(sin_theta, cos_theta))
+
+    if theta <= EPS:
+        # theta=0 时旋转轴没有唯一性，任选单位轴即可。
+        return np.array([1.0, 0.0, 0.0]), 0.0
+
+    if np.pi - theta <= 1e-7:
+        # 接近 pi 时 sin(theta) 很小，不能直接除反对称部分。
+        diagonal = np.maximum((np.diag(R) + 1.0) / 2.0, 0.0)
+        i = int(np.argmax(diagonal))
+        axis = np.zeros(3)
+        axis[i] = np.sqrt(diagonal[i])
+        for j in range(3):
+            if j != i:
+                axis[j] = (R[i, j] + R[j, i]) / (4.0 * axis[i])
+        return axis / np.linalg.norm(axis), theta
+
+    axis = skew_vector / (2.0 * np.sin(theta))
+    return axis / np.linalg.norm(axis), theta
+
+
+def quaternion_to_matrix(quaternion):
+    q = np.asarray(quaternion, dtype=float)
+    if q.shape != (4,) or not np.all(np.isfinite(q)):
+        raise ValueError("quaternion must be a finite vector with shape (4,)")
+    norm = np.linalg.norm(q)
+    if norm <= EPS:
+        raise ValueError("quaternion must be non-zero")
+
+    w, x, y, z = q / norm
+    return np.array([
+        [1 - 2 * (y*y + z*z), 2 * (x*y - z*w), 2 * (x*z + y*w)],
+        [2 * (x*y + z*w), 1 - 2 * (x*x + z*z), 2 * (y*z - x*w)],
+        [2 * (x*z - y*w), 2 * (y*z + x*w), 1 - 2 * (x*x + y*y)],
+    ])
+
+
+def matrix_to_quaternion(matrix):
+    R = _check_rotation_matrix(matrix)
+    trace = np.trace(R)
+
+    # 按 trace 或最大对角元素分支，避免接近 pi 时数值不稳定。
+    if trace > 0.0:
+        s = 2.0 * np.sqrt(trace + 1.0)
+        q = np.array([
+            0.25 * s,
+            (R[2, 1] - R[1, 2]) / s,
+            (R[0, 2] - R[2, 0]) / s,
+            (R[1, 0] - R[0, 1]) / s,
+        ])
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+        q = np.array([
+            (R[2, 1] - R[1, 2]) / s,
+            0.25 * s,
+            (R[0, 1] + R[1, 0]) / s,
+            (R[0, 2] + R[2, 0]) / s,
+        ])
+    elif R[1, 1] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+        q = np.array([
+            (R[0, 2] - R[2, 0]) / s,
+            (R[0, 1] + R[1, 0]) / s,
+            0.25 * s,
+            (R[1, 2] + R[2, 1]) / s,
+        ])
+    else:
+        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+        q = np.array([
+            (R[1, 0] - R[0, 1]) / s,
+            (R[0, 2] + R[2, 0]) / s,
+            (R[1, 2] + R[2, 1]) / s,
+            0.25 * s,
+        ])
+
+    q /= np.linalg.norm(q)
+    # 固定 q[0] >= 0，便于日志和数值比较；这不改变旋转。
+    return q if q[0] >= 0.0 else -q
+```
 
 核心关系：
 
-- 轴角转矩阵：先归一化旋转轴，再用 Rodrigues 公式
-- 矩阵转轴角：先求角度，再从反对称部分恢复轴
-- 四元数转矩阵：按固定顺序展开
-- 矩阵转四元数：按 `trace` 或主对角线最大项做分支，避免数值不稳定
+- 轴角转矩阵：先归一化旋转轴，再用 Rodrigues 公式；
+- 矩阵转轴角：用 `trace` 求角度，再从反对称部分恢复轴；
+- 四元数转矩阵：先归一化，再按 `[w, x, y, z]` 展开；
+- 矩阵转四元数：按 `trace` 或最大对角元素分支，避免数值不稳定。
 
-边界处理：
+测试旋转误差时使用：
 
-- 旋转角接近 0 时用小角度近似
-- 旋转角接近 `pi` 时单独分支
-- 四元数要先归一化
+```python
+def rotation_error(R1, R2):
+    relative = R1.T @ R2
+    cosine = np.clip((np.trace(relative) - 1.0) / 2.0, -1.0, 1.0)
+    sine = 0.5 * np.linalg.norm([
+        relative[2, 1] - relative[1, 2],
+        relative[0, 2] - relative[2, 0],
+        relative[1, 0] - relative[0, 1],
+    ])
+    return np.arctan2(sine, cosine)
+```
+
+固定随机种子测试至少 `1000` 次，并覆盖 `angle=0`、接近 `pi` 和一般角度。
+四元数往返时可以比较旋转矩阵误差，或者比较
+`abs(np.dot(q1, q2))` 是否接近 `1`，不能直接要求 `q1 == q2`。
 
 ### E3. 题目
 > 实现 `make_transform`、`inverse_transform`、`transform_points` 和 `compose_transforms`，要求支持单点和批量点，并验证逆变换和复合变换的一致性。
 
 答案：
 
-常见约定：
+下面采用列向量约定：
 
-- `make_transform(rotation, translation)`：构造 4x4 齐次矩阵
-- `inverse_transform(transform)`：利用 `R^T` 和 `-R^T t`
-- `transform_points(transform, points)`：单点和批量点都要支持
-- `compose_transforms(transform_ab, transform_bc)`：直接做矩阵乘法
+```text
+p_a = T_ab p_b
+T_ab：把 {B} 坐标中的点变换到 {A}
+T_ac = T_ab @ T_bc
+```
 
-关键测试：
+因此齐次变换写成：
 
-- `T @ T^{-1} ≈ I`
-- 单点和批量点结果一致
-- 连续复合结果和逐步变换结果一致
+```text
+T = [[R, t],
+     [0, 1]]
+```
+
+其中 `R` 是 `SO(3)` 旋转矩阵，`t` 是平移向量。
+
+完整实现如下：
+
+```python
+import numpy as np
+
+
+def make_transform(rotation, translation):
+    rotation = np.asarray(rotation, dtype=float)
+    translation = np.asarray(translation, dtype=float)
+    if rotation.shape != (3, 3):
+        raise ValueError("rotation must have shape (3, 3)")
+    if translation.shape != (3,):
+        raise ValueError("translation must have shape (3,)")
+    if not np.all(np.isfinite(rotation)):
+        raise ValueError("rotation must be finite")
+    if not np.all(np.isfinite(translation)):
+        raise ValueError("translation must be finite")
+    if not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-8):
+        raise ValueError("rotation must be orthogonal")
+    if not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-8):
+        raise ValueError("rotation must have determinant +1")
+
+    T = np.eye(4)
+    T[:3, :3] = rotation
+    T[:3, 3] = translation
+    return T
+
+
+def _validate_transform(transform):
+    T = np.asarray(transform, dtype=float)
+    if T.shape != (4, 4) or not np.all(np.isfinite(T)):
+        raise ValueError("transform must be a finite 4x4 matrix")
+    if not np.allclose(T[:3, :3].T @ T[:3, :3], np.eye(3), atol=1e-8):
+        raise ValueError("transform rotation block is invalid")
+    if not np.isclose(np.linalg.det(T[:3, :3]), 1.0, atol=1e-8):
+        raise ValueError("transform rotation block must have determinant +1")
+    if not np.allclose(T[3], [0.0, 0.0, 0.0, 1.0], atol=1e-8):
+        raise ValueError("invalid homogeneous bottom row")
+    return T
+
+
+def inverse_transform(transform):
+    T = _validate_transform(transform)
+    R = T[:3, :3]
+    t = T[:3, 3]
+
+    T_inverse = np.eye(4)
+    T_inverse[:3, :3] = R.T
+    T_inverse[:3, 3] = -R.T @ t
+    return T_inverse
+
+
+def transform_points(transform, points):
+    T = _validate_transform(transform)
+    points = np.asarray(points, dtype=float)
+    if not np.all(np.isfinite(points)):
+        raise ValueError("points must be finite")
+
+    R = T[:3, :3]
+    t = T[:3, 3]
+    if points.shape == (3,):
+        return R @ points + t
+    if points.ndim == 2 and points.shape[1] == 3:
+        return points @ R.T + t
+    raise ValueError("points must have shape (3,) or (N, 3)")
+
+
+def compose_transforms(transform_ab, transform_bc):
+    T_ab = _validate_transform(transform_ab)
+    T_bc = _validate_transform(transform_bc)
+    return T_ab @ T_bc
+```
+
+逆变换的推导是：
+
+```text
+p_a = R_ab p_b + t_ab
+p_b = R_ab^T (p_a - t_ab)
+    = R_ab^T p_a - R_ab^T t_ab
+```
+
+所以：
+
+```text
+T_ab^-1 = [[R_ab^T, -R_ab^T t_ab],
+           [0,       1          ]]
+```
+
+测试时至少要验证：
+
+```python
+identity = np.eye(4)
+assert np.allclose(T @ inverse_transform(T), identity)
+assert np.allclose(inverse_transform(T) @ T, identity)
+
+single = transform_points(T, point)
+batch = transform_points(T, point.reshape(1, 3))[0]
+assert np.allclose(single, batch)
+
+sequential = transform_points(
+    T_ab,
+    transform_points(T_bc, points),
+)
+composed = transform_points(
+    compose_transforms(T_ab, T_bc),
+    points,
+)
+assert np.allclose(sequential, composed)
+```
+
+固定随机种子运行至少 `1000` 次，并记录：
+
+- `T @ T^{-1}` 的最大绝对矩阵误差；
+- 单点与批量点结果的最大绝对误差；
+- 连续变换与复合变换结果的最大绝对误差；
+- 点经过变换再经过逆变换后的最大绝对误差。
 
 ### E4. 题目
 > 使用自己的函数或可靠库完成 `so3_exp`、`so3_log`，并画出误差随旋转角变化的曲线。说明哪些角度附近误差会变大，以及为什么。
 
 答案：
 
-参考要点：
+约定旋转向量 `phi` 的方向是旋转轴，模长是旋转角：
 
-- `so3_exp`：用 Rodrigues 公式
-- `so3_log`：用 `trace` 求角度，再从反对称部分恢复轴角
-- 小角度用级数展开
-- 接近 `pi` 时要单独处理
+```text
+phi = theta * axis
+```
 
-误差通常在以下位置变大：
+完整实现如下：
 
-- `0` 附近：除法和反正弦/反余弦容易损失精度
-- `pi` 附近：轴方向不唯一，数值分支复杂
+```python
+import numpy as np
+
+EPS = 1e-12
+
+
+def skew(vector):
+    x, y, z = vector
+    return np.array([
+        [0.0, -z, y],
+        [z, 0.0, -x],
+        [-y, x, 0.0],
+    ])
+
+
+def so3_exp(rotation_vector):
+    phi = np.asarray(rotation_vector, dtype=float)
+    if phi.shape != (3,) or not np.all(np.isfinite(phi)):
+        raise ValueError("rotation_vector must be a finite vector with shape (3,)")
+
+    theta = np.linalg.norm(phi)
+    Phi = skew(phi)
+
+    if theta < 1e-4:
+        theta2 = theta * theta
+        A = 1.0 - theta2 / 6.0 + theta2 * theta2 / 120.0
+        B = 0.5 - theta2 / 24.0 + theta2 * theta2 / 720.0
+    else:
+        A = np.sin(theta) / theta
+        B = (1.0 - np.cos(theta)) / (theta * theta)
+
+    return np.eye(3) + A * Phi + B * (Phi @ Phi)
+
+
+def _axis_near_pi(R):
+    diagonal = np.maximum((np.diag(R) + 1.0) / 2.0, 0.0)
+    i = int(np.argmax(diagonal))
+    axis = np.zeros(3)
+    axis[i] = np.sqrt(diagonal[i])
+
+    for j in range(3):
+        if j != i:
+            axis[j] = (R[i, j] + R[j, i]) / (4.0 * axis[i])
+    return axis / np.linalg.norm(axis)
+
+
+def so3_log(rotation):
+    R = np.asarray(rotation, dtype=float)
+    if (
+        R.shape != (3, 3)
+        or not np.all(np.isfinite(R))
+        or not np.allclose(R.T @ R, np.eye(3), atol=1e-8)
+        or not np.isclose(np.linalg.det(R), 1.0, atol=1e-8)
+    ):
+        raise ValueError("rotation must be a valid SO(3) matrix")
+
+    vee = np.array([
+        R[2, 1] - R[1, 2],
+        R[0, 2] - R[2, 0],
+        R[1, 0] - R[0, 1],
+    ])
+    sin_theta = 0.5 * np.linalg.norm(vee)
+    cos_theta = np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)
+    theta = np.arctan2(sin_theta, cos_theta)
+
+    if theta < 1e-7:
+        # R 接近 I 时，Log(R) vee 约等于 vee(R-R.T)/2。
+        return 0.5 * vee
+
+    if np.pi - theta < 1e-7:
+        # 接近 pi 时 sin(theta) 接近 0，改从对角线恢复轴。
+        return theta * _axis_near_pi(R)
+
+    axis = vee / (2.0 * np.sin(theta))
+    return theta * axis
+```
+
+`so3_exp` 的公式来自 Rodrigues 展开：
+
+```text
+Exp(phi^) = I
+          + sin(theta)/theta * phi^
+          + (1-cos(theta))/theta^2 * (phi^)^2
+```
+
+当 `theta` 接近 `0` 时，直接计算两个系数会有除零或消去误差，
+所以使用 Taylor 展开：
+
+```text
+sin(theta)/theta       ≈ 1 - theta^2/6 + theta^4/120
+(1-cos(theta))/theta²  ≈ 1/2 - theta²/24 + theta^4/720
+```
+
+`so3_log` 先由：
+
+```text
+cos(theta) = (trace(R) - 1) / 2
+sin(theta) = ||vee(R - R^T)|| / 2
+```
+
+使用 `atan2(sin(theta), cos(theta))` 求主值角度，再恢复旋转轴。
+相比直接使用 `arccos`，`atan2` 在零角附近更稳定。
+
+接近 `pi` 时，`sin(theta)` 接近零，反对称部分几乎没有信息，
+此时使用：
+
+```text
+axis_i^2 = (R_ii + 1) / 2
+```
+
+从最大的对角元素开始恢复轴，避免除以接近零的数。
+
+测试代码：
+
+```python
+def rotation_error(R1, R2):
+    relative = R1.T @ R2
+    vee = np.array([
+        relative[2, 1] - relative[1, 2],
+        relative[0, 2] - relative[2, 0],
+        relative[1, 0] - relative[0, 1],
+    ])
+    sin_theta = 0.5 * np.linalg.norm(vee)
+    cos_theta = np.clip((np.trace(relative) - 1.0) / 2.0, -1.0, 1.0)
+    return np.arctan2(sin_theta, cos_theta)
+
+
+rng = np.random.default_rng(42)
+max_exp_log_error = 0.0
+
+for _ in range(1000):
+    axis = rng.normal(size=3)
+    axis /= np.linalg.norm(axis)
+    theta = rng.uniform(0.0, np.pi)
+    phi = theta * axis
+
+    R = so3_exp(phi)
+    phi_recovered = so3_log(R)
+    R_recovered = so3_exp(phi_recovered)
+    max_exp_log_error = max(
+        max_exp_log_error,
+        rotation_error(R, R_recovered),
+    )
+
+print(max_exp_log_error)
+```
+
+还需要单独测试 `theta=0`、接近 `0`、接近 `pi` 和正好 `pi`。
+如果测试 `Log(Exp(phi))` 的旋转向量本身，必须注意主值范围：
+通常 `Log` 返回角度在 `[0, pi]`，因此当 `||phi|| > pi` 时，
+返回向量可能变成相反轴、较小角度，但重新 `Exp` 后的旋转矩阵仍然相同。
+
+误差通常在以下位置更敏感：
+
+- `0` 附近：直接除以 `theta` 或使用 `arccos` 会损失精度；
+- `pi` 附近：旋转轴符号不唯一，且反对称部分趋近于零；
+- `pi` 之外：对数映射使用主值，旋转向量表示会发生分支切换。
 
 ### E5. 题目
 > 使用 Matplotlib 画出世界坐标系、两个子坐标系和一个点变换前后的结果，要求同时用图和数值验证复合顺序。
 
 答案：
 
-图里至少应包含：
+采用列向量约定：
 
-- 世界系
-- 两个子坐标系
-- 一个被变换的点
+```text
+p_a = T_ab p_b
+p_w = T_wa p_a
+T_wb = T_wa @ T_ab
+```
 
-同时用数值验证：
+其中：
 
-- 变换链顺序没有写反
-- 图上的几何方向和矩阵计算一致
+- `T_wa` 把 `{A}` 中的坐标变换到 `{W}`；
+- `T_ab` 把 `{B}` 中的坐标变换到 `{A}`；
+- `T_wb` 把 `{B}` 中的坐标直接变换到 `{W}`。
+
+完整实验代码如下：
+
+```python
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+def draw_frame(ax, T, name, length=0.45):
+    origin = T[:3, 3]
+    rotation = T[:3, :3]
+    colors = ["tab:red", "tab:green", "tab:blue"]
+    labels = ["x", "y", "z"]
+
+    ax.scatter(*origin, color="black", s=24)
+    ax.text(*origin, f"  {name}")
+    for i, (color, label) in enumerate(zip(colors, labels)):
+        direction = length * rotation[:, i]
+        ax.quiver(
+            *origin,
+            *direction,
+            color=color,
+            linewidth=2.0,
+            arrow_length_ratio=0.18,
+        )
+        ax.text(*(origin + direction), f"{label}_{name}", color=color)
+
+
+rng = np.random.default_rng(42)
+
+# T_wa: A -> W, T_ab: B -> A
+T_wa = make_transform(
+    so3_exp(rng.normal(size=3)),
+    rng.uniform(-1.0, 1.0, size=3),
+)
+T_ab = make_transform(
+    so3_exp(rng.normal(size=3)),
+    rng.uniform(-1.0, 1.0, size=3),
+)
+T_wb = T_wa @ T_ab
+
+p_b = rng.uniform(-0.6, 0.6, size=3)
+p_a = transform_points(T_ab, p_b)
+p_w_step = transform_points(T_wa, p_a)
+p_w_direct = transform_points(T_wb, p_b)
+
+assert np.allclose(p_w_step, p_w_direct)
+
+# 矩阵乘法通常不交换；反向相乘只作为数值对照，不能解释为同一条变换链。
+wrong_order = T_ab @ T_wa
+noncommutativity_error = np.max(np.abs(T_wb - wrong_order))
+assert noncommutativity_error > 1e-8
+
+figure = plt.figure(figsize=(9, 7))
+ax = figure.add_subplot(111, projection="3d")
+draw_frame(ax, np.eye(4), "W")
+draw_frame(ax, T_wa, "A")
+draw_frame(ax, T_wb, "B")
+
+ax.scatter(*p_w_direct, color="darkorange", s=70, label="same point in W")
+ax.text(
+    *p_w_direct,
+    "  p_W=" + np.array2string(p_w_direct, precision=2),
+    color="darkorange",
+)
+
+ax.text2D(
+    0.02,
+    0.97,
+    "p_B = " + np.array2string(p_b, precision=3) + "\n"
+    "p_A = " + np.array2string(p_a, precision=3) + "\n"
+    "p_W = " + np.array2string(p_w_direct, precision=3) + "\n"
+    f"chain error = {np.max(np.abs(p_w_step - p_w_direct)):.2e}\n"
+    f"wrong-order diff = {noncommutativity_error:.2e}",
+    transform=ax.transAxes,
+    verticalalignment="top",
+    family="monospace",
+    bbox={"facecolor": "white", "alpha": 0.8},
+)
+
+ax.set_xlabel("X")
+ax.set_ylabel("Y")
+ax.set_zlabel("Z")
+ax.set_title("SE(3) coordinate transform: B -> A -> W")
+ax.legend()
+figure.tight_layout()
+figure.savefig("e5-coordinate-transforms.png", dpi=160)
+plt.close(figure)
+
+parameters = {
+    "seed": 42,
+    "T_wa": T_wa.tolist(),
+    "T_ab": T_ab.tolist(),
+    "T_wb": T_wb.tolist(),
+    "p_b": p_b.tolist(),
+    "p_a": p_a.tolist(),
+    "p_w": p_w_direct.tolist(),
+    "chain_max_abs_error": float(np.max(np.abs(p_w_step - p_w_direct))),
+    "noncommutativity_max_abs_difference": float(noncommutativity_error),
+}
+Path("e5-coordinate-transforms.json").write_text(
+    json.dumps(parameters, indent=2),
+    encoding="utf-8",
+)
+```
+
+图中应包含：
+
+- 世界坐标系 `{W}`；
+- 两个子坐标系 `{A}`、`{B}`；
+- 每个坐标系的红、绿、蓝三根轴；
+- 点在 `{B}`、`{A}`、`{W}` 中的坐标；
+- 两级变换链的数值误差。
+
+验收时检查：
+
+```text
+max_abs(p_w_step - p_w_direct) 接近 0
+max_abs(T_wa @ T_ab - T_ab @ T_wa) 明显大于 0
+```
+
+第一个结果说明复合顺序和图中的点位置一致；第二个结果说明
+刚体变换的矩阵乘法一般不满足交换律，不能随意调换变换顺序。
 
 ### E6. 题目
 > 固定 yaw 和 roll，让 `ZYX` 欧拉角中的 pitch 从 `80°` 变化到 `100°`。把欧拉角转成旋转矩阵后再转回，记录恢复出的三个角度，并解释为什么会出现跳变。
 
 答案：
 
-你通常会观察到：
+采用主动旋转和 `ZYX` 顺序：
 
-- pitch 连续变化
-- yaw 和 roll 在 `90°` 附近突然跳变
-- 旋转矩阵本身仍然连续
+```text
+R(yaw, pitch, roll) = Rz(yaw) Ry(pitch) Rx(roll)
+```
 
-这说明跳变来自欧拉角参数化，而不是刚体运动本身。
+固定：
+
+```text
+yaw = 35°
+roll = -25°
+pitch: 80° -> 100°
+```
+
+欧拉角转旋转矩阵：
+
+```python
+import numpy as np
+
+
+def Rx(angle):
+    c, s = np.cos(angle), np.sin(angle)
+    return np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, c, -s],
+        [0.0, s, c],
+    ])
+
+
+def Ry(angle):
+    c, s = np.cos(angle), np.sin(angle)
+    return np.array([
+        [c, 0.0, s],
+        [0.0, 1.0, 0.0],
+        [-s, 0.0, c],
+    ])
+
+
+def Rz(angle):
+    c, s = np.cos(angle), np.sin(angle)
+    return np.array([
+        [c, -s, 0.0],
+        [s, c, 0.0],
+        [0.0, 0.0, 1.0],
+    ])
+
+
+def euler_zyx_to_matrix(yaw, pitch, roll):
+    return Rz(yaw) @ Ry(pitch) @ Rx(roll)
+```
+
+一般情况下，从矩阵恢复 `ZYX` 欧拉角：
+
+```python
+def matrix_to_euler_zyx(R, singularity_tolerance=1e-10):
+    sine_pitch = np.clip(-R[2, 0], -1.0, 1.0)
+    pitch = np.arcsin(sine_pitch)
+    cosine_pitch = np.sqrt(max(0.0, 1.0 - sine_pitch**2))
+
+    if cosine_pitch > singularity_tolerance:
+        yaw = np.arctan2(R[1, 0], R[0, 0])
+        roll = np.arctan2(R[2, 1], R[2, 2])
+    else:
+        # pitch=+/-90° 时 yaw 与 roll 耦合，无法分别唯一确定。
+        yaw = 0.0
+        if sine_pitch > 0.0:
+            roll = np.arctan2(R[0, 1], R[0, 2])
+        else:
+            roll = np.arctan2(-R[0, 1], -R[0, 2])
+    return yaw, pitch, roll
+```
+
+实验循环：
+
+```python
+pitch_values = np.deg2rad(np.linspace(80.0, 100.0, 401))
+yaw = np.deg2rad(35.0)
+roll = np.deg2rad(-25.0)
+
+matrices = np.array([
+    euler_zyx_to_matrix(yaw, pitch, roll)
+    for pitch in pitch_values
+])
+recovered = np.array([
+    matrix_to_euler_zyx(R)
+    for R in matrices
+])
+
+matrix_step_error = np.max(
+    np.abs(np.diff(matrices, axis=0)),
+    axis=(1, 2),
+)
+reconstructed = np.array([
+    euler_zyx_to_matrix(yaw_i, pitch_i, roll_i)
+    for yaw_i, pitch_i, roll_i in recovered
+])
+reconstruction_error = np.max(
+    np.abs(matrices - reconstructed),
+    axis=(1, 2),
+)
+```
+
+画图时应同时显示：
+
+1. 输入 yaw、pitch、roll；
+2. 从矩阵恢复出的 yaw、pitch、roll；
+3. 相邻旋转矩阵的最大差异；
+4. 用恢复欧拉角重建矩阵的误差。
+
+现象与解释：
+
+- 输入 pitch 从 `80°` 连续增加到 `100°`；
+- 恢复出的 pitch 通常被限制在 `[-90°, 90°]`；
+- 穿过 `90°` 后，恢复出的 yaw 和 roll 会跳到另一组等价角度；
+- 原始旋转矩阵仍然连续，且重建误差接近浮点误差；
+- 在正好 `pitch=90°` 时，yaw 和 roll 的两个自由度合并，只能观察到它们的某种组合。
+
+因此 gimbal lock 不是刚体真的丢失了一个物理自由度，而是
+`ZYX` 欧拉角参数化在 `pitch=±90°` 处退化。工程上应避免直接对欧拉角做插值
+或控制误差，优先使用旋转矩阵、四元数或李代数增量。
+
+影响包括：
+
+- 姿态插值：欧拉角可能突然跳变，导致插值路径错误；
+- 控制器：角度误差可能出现很大的假跳变；
+- 日志分析：角度曲线不连续，但旋转矩阵曲线仍连续；
+- 调试：必须同时检查旋转矩阵误差，不能只看欧拉角分量。
 
 ## F. 应用与理解
 
@@ -727,4 +1495,3 @@ T_world_target = T_world_base T_base_camera T_camera_target
 5. 我能用随机测试验证实现，并记录误差阈值、随机种子和失败样例。
 6. 我能画出多坐标系变换图，并让图和数值结果一致。
 7. 我还需要继续补强的是 `SE(3)` 的 `Log` 在接近 `pi`、以及四元数双覆盖下的处理细节。
-
